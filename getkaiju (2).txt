@@ -1,0 +1,75 @@
+-- run this FIRST
+local function save(name, data)
+    pcall(function()
+        if not isfolder("luarmor_dumps") then makefolder("luarmor_dumps") end
+        writefile("luarmor_dumps/" .. name, data)
+        print("[Dumper] SAVED → luarmor_dumps/" .. name .. "  (" .. #data .. " bytes)")
+    end)
+end
+
+local dumpCount = 0
+local function dumpChunk(src, origin)
+    if type(src) ~= "string" or #src < 100 then return end
+    -- skip obvious non payloads
+    if src:find("Your executor is not supported") then return end
+    if src:find("Do not save this file") then return end
+
+    dumpCount = dumpCount + 1
+    local stamp = os.date("%Y%m%d_%H%M%S")
+    local fname = string.format("payload_%s_%d.lua", stamp, dumpCount)
+    save(fname, src)
+    print("[Dumper] caught from " .. origin)
+    print("[Dumper] preview: " .. src:sub(1, 250):gsub("\n", "\\n"))
+end
+
+if loadstring then
+    local old = loadstring
+    loadstring = newcclosure(function(src, name)
+        dumpChunk(src, "loadstring")
+        return old(src, name)
+    end)
+end
+
+if load then
+    local old = load
+    load = newcclosure(function(src, name, mode, env)
+        if type(src) == "string" then dumpChunk(src, "load") end
+        return old(src, name, mode, env)
+    end)
+end
+
+for _, name in ipairs({"loadstring", "Loadstring", "load_string"}) do
+    local fn = getgenv and getgenv()[name] or _G[name]
+    if type(fn) == "function" and fn ~= loadstring then
+        local old = fn
+        local hooked = newcclosure(function(src, ...)
+            dumpChunk(src, name)
+            return old(src, ...)
+        end)
+        if getgenv then getgenv()[name] = hooked end
+        _G[name] = hooked
+    end
+end
+
+if getfenv and setfenv then
+    local old_getfenv = getfenv
+    getfenv = newcclosure(function(lvl)
+        return old_getfenv(lvl or 1)
+    end)
+end
+task.spawn(function()
+    task.wait(4) -- give luarmor time to finish auth + decrypt
+    print("[Dumper] scanning memory for large strings...")
+    if getgc then
+        for _, obj in ipairs(getgc(true)) do
+            if type(obj) == "string" and #obj > 2000 then
+                if obj:find("function") or obj:find("local") or obj:find("return") or obj:find("getfenv") then
+                    dumpChunk(obj, "gc-scan")
+                end
+            end
+        end
+    end
+    print("[Dumper] scan finished. check luarmor_dumps folder.")
+end)
+
+print("[Dumper] active run the Luarmor script")
